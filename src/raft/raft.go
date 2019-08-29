@@ -17,7 +17,11 @@ package raft
 //   in the same server.
 //
 
-import "sync"
+import (
+	"math/rand"
+	"sync"
+	"time"
+)
 import "6.824-2018-kyrie/src/labrpc"
 
 // import "bytes"
@@ -81,6 +85,10 @@ type Raft struct {
 	//Volatile state on leaders(Reinitialized after election)
 	nextIndex  []int "for each server,index of the next log entry to send to that server(initialized to leader last log index +1)"
 	matchIndex []int "for each server,index of highest log entry known to be replicated on server(initialized to 0,increases monotonically)"
+
+	applyCh     chan ApplyMsg
+	voteCh      chan bool
+	appendLogCh chan bool
 }
 
 // return currentTerm and whether this server
@@ -265,9 +273,44 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.me = me
 
 	// Your initialization code here (2A, 2B, 2C).
+	rf.state = Follower //all raft server's initial state is follower
+	rf.currentTerm = 0
+	rf.votedFor = NULL
+	rf.log = make([]Log, 1)
+
+	rf.commitIndex = 0
+	rf.lastApplied = 0
+	rf.nextIndex = make([]int, len(peers))  //create an len(peers) slice for store nextIndex for every raft server
+	rf.matchIndex = make([]int, len(peers)) //create an len(peers) slice for store matchIndex for every raft server
+
+	rf.applyCh = applyCh
+	rf.voteCh = make(chan bool, 1)
+	rf.appendLogCh = make(chan bool, 1)
 
 	// initialize from state persisted before a crash
 	rf.readPersist(persister.ReadRaftState())
+
+	heartbeatTime := time.Duration(100) * time.Millisecond
+
+	go func() {
+		for {
+			electionTime := time.Duration(rand.Intn(100)+300) * time.Millisecond
+			switch rf.state {
+			case Follower, Candidate:
+				select {
+				case <-rf.voteCh:
+				case <-rf.appendLogCh:
+				case <-time.After(electionTime):
+					rf.mu.Lock()
+					rf.beCandidate() // turn to candidate,send RequestVoteRpc to other raft servers,start election
+					rf.mu.Unlock()
+				}
+			case Leader:
+				time.Sleep(heartbeatTime)
+				rf.startAppendLog()
+			}
+		}
+	}()
 
 	return rf
 }
