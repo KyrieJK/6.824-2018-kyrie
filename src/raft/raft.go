@@ -18,12 +18,10 @@ package raft
 //
 
 import "sync"
-import "labrpc"
+import "6.824-2018-kyrie/src/labrpc"
 
 // import "bytes"
 // import "labgob"
-
-
 
 //
 // as each Raft peer becomes aware that successive log entries are
@@ -42,6 +40,21 @@ type ApplyMsg struct {
 	CommandIndex int
 }
 
+type State int
+
+const (
+	Follower State = iota
+	Candidate
+	Leader
+)
+
+const NULL int = -1
+
+type Log struct {
+	Term    int
+	Command interface{}
+}
+
 //
 // A Go object implementing a single Raft peer.
 //
@@ -54,7 +67,20 @@ type Raft struct {
 	// Your data here (2A, 2B, 2C).
 	// Look at the paper's Figure 2 for a description of what
 	// state a Raft server must maintain.
+	state State
 
+	//Persistent state on all servers
+	currentTerm int   "latest term server has seen(initialized to 0 on first boot,increases monotonically)"
+	votedFor    int   "candidateId that received vote in current term(or null if none)"
+	log         []Log "log entries;each entry contains command for state machine,and term when entry was received by leader(first index is 1)"
+
+	//Volatile state on all servers
+	commitIndex int "index of highest log entry known to be committed(initialized to 0,increases monotonically)"
+	lastApplied int "index of highest log entry applied to state machine(initialized to 0,increases monotonically)"
+
+	//Volatile state on leaders(Reinitialized after election)
+	nextIndex  []int "for each server,index of the next log entry to send to that server(initialized to leader last log index +1)"
+	matchIndex []int "for each server,index of highest log entry known to be replicated on server(initialized to 0,increases monotonically)"
 }
 
 // return currentTerm and whether this server
@@ -64,9 +90,10 @@ func (rf *Raft) GetState() (int, bool) {
 	var term int
 	var isleader bool
 	// Your code here (2A).
+	term = rf.currentTerm
+	isleader = (rf.state == Leader)
 	return term, isleader
 }
-
 
 //
 // save Raft's persistent state to stable storage,
@@ -83,7 +110,6 @@ func (rf *Raft) persist() {
 	// data := w.Bytes()
 	// rf.persister.SaveRaftState(data)
 }
-
 
 //
 // restore previously persisted state.
@@ -107,15 +133,16 @@ func (rf *Raft) readPersist(data []byte) {
 	// }
 }
 
-
-
-
 //
 // example RequestVote RPC arguments structure.
 // field names must start with capital letters!
 //
 type RequestVoteArgs struct {
 	// Your data here (2A, 2B).
+	Term         int
+	CandidateId  int
+	LastLogIndex int
+	LastLogTerm  int
 }
 
 //
@@ -124,6 +151,8 @@ type RequestVoteArgs struct {
 //
 type RequestVoteReply struct {
 	// Your data here (2A).
+	Term        int
+	VoteGranted bool
 }
 
 //
@@ -167,6 +196,21 @@ func (rf *Raft) sendRequestVote(server int, args *RequestVoteArgs, reply *Reques
 	return ok
 }
 
+type AppendEntriesArgs struct {
+	Term         int   "leader's term"
+	LeaderId     int   "so follower can redirect clients"
+	PrevLogIndex int   "index of log entry immediately preceding"
+	PrevLogTerm  int   "term of prevLogIndex entry"
+	Entries      []Log "log entries to store(empty for heartbeat;may send more than one for efficiency)"
+	LeaderCommit int   "leader's commitIndex"
+}
+
+type AppendEntriesReply struct {
+	Term          int  "currentTerm,for leader to update itself"
+	Success       bool "return true if follower contained entry matching prevLogIndex and prevLogTerm"
+	ConflictIndex int  "first Log index it stores for that conflict term"
+	ConflictTerm  int  "the term of the conflicting log entry"
+}
 
 //
 // the service using Raft (e.g. a k/v server) wants to start
@@ -188,7 +232,6 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	isLeader := true
 
 	// Your code here (2B).
-
 
 	return index, term, isLeader
 }
@@ -225,7 +268,6 @@ func Make(peers []*labrpc.ClientEnd, me int,
 
 	// initialize from state persisted before a crash
 	rf.readPersist(persister.ReadRaftState())
-
 
 	return rf
 }
