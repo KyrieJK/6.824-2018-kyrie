@@ -254,6 +254,19 @@ func (rf *Raft) Kill() {
 	// Your code here, if desired.
 }
 
+func (rf *Raft) beCandidate() {
+	rf.state = Candidate  //switch to Candidate
+	rf.currentTerm++      //increment currentTerm
+	rf.votedFor = rf.me   // vote myself first
+	rf.persist()          //save to storage
+	go rf.startElection() //send RequestVote RPCs to all other servers
+}
+
+//If election timeout elapses:start new election handled in caller
+func (rf *Raft) startElection() {
+
+}
+
 //
 // the service or tester wants to create a Raft server. the ports
 // of all the Raft servers (including this one) are in peers[]. this
