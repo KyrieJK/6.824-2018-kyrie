@@ -317,7 +317,7 @@ func (rf *Raft) getLastLogTerm() int {
 }
 
 func (rf *Raft) beLeader() {
-
+	//注释
 }
 
 func (rf *Raft) beFollower(termid int) {
