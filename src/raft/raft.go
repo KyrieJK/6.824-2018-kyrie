@@ -316,6 +316,14 @@ func (rf *Raft) getLastLogTerm() int {
 	return rf.log[idx].Term
 }
 
+func (rf *Raft) beLeader() {
+
+}
+
+func (rf *Raft) beFollower(termid int) {
+
+}
+
 //
 // the service or tester wants to create a Raft server. the ports
 // of all the Raft servers (including this one) are in peers[]. this
