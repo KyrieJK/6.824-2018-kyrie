@@ -20,6 +20,7 @@ package raft
 import (
 	"math/rand"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 import "6.824-2018-kyrie/src/labrpc"
@@ -264,7 +265,55 @@ func (rf *Raft) beCandidate() {
 
 //If election timeout elapses:start new election handled in caller
 func (rf *Raft) startElection() {
+	rf.mu.Lock()
+	args := RequestVoteArgs{
+		Term:         rf.currentTerm,
+		CandidateId:  rf.me,
+		LastLogIndex: rf.getLastLogIdx(),
+		LastLogTerm:  rf.getLastLogTerm(),
+	}
+	rf.mu.Unlock()
+	var votes int32 = 1
+	for i := 0; i < len(rf.peers); i++ {
+		if i == rf.me {
+			continue
+		}
+		go func(idx int) {
+			reply := &RequestVoteReply{}
+			ret := rf.sendRequestVote(idx, &args, reply)
 
+			if ret {
+				rf.mu.Lock()
+				defer rf.mu.Unlock()
+				if reply.Term > rf.currentTerm {
+					rf.beFollower(reply.Term)
+					return
+				}
+				if rf.state != Candidate || rf.currentTerm != args.Term {
+					return
+				}
+				if reply.VoteGranted {
+					atomic.AddInt32(&votes, 1)
+				}
+				if atomic.LoadInt32(&votes) > int32(len(rf.peers)/2) {
+					rf.beLeader()
+
+				}
+			}
+		}(i)
+	}
+}
+
+func (rf *Raft) getLastLogIdx() int {
+	return len(rf.log) - 1
+}
+
+func (rf *Raft) getLastLogTerm() int {
+	idx := rf.getLastLogIdx()
+	if idx < 0 {
+		return -1
+	}
+	return rf.log[idx].Term
 }
 
 //
