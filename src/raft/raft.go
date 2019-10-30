@@ -99,8 +99,10 @@ func (rf *Raft) GetState() (int, bool) {
 	var term int
 	var isleader bool
 	// Your code here (2A).
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
 	term = rf.currentTerm
-	isleader = (rf.state == Leader)
+	isleader = rf.state == Leader
 	return term, isleader
 }
 
@@ -297,7 +299,8 @@ func (rf *Raft) startElection() {
 				}
 				if atomic.LoadInt32(&votes) > int32(len(rf.peers)/2) {
 					rf.beLeader()
-
+					rf.startAppendLog()
+					send(rf.voteCh)
 				}
 			}
 		}(i)
@@ -317,11 +320,130 @@ func (rf *Raft) getLastLogTerm() int {
 }
 
 func (rf *Raft) beLeader() {
-	//注释
+	if rf.state != Candidate {
+		return
+	}
+	rf.state = Leader
+	rf.nextIndex = make([]int, len(rf.peers))
+	rf.matchIndex = make([]int, len(rf.peers))
+	for i := 0; i < len(rf.nextIndex); i++ {
+		rf.nextIndex[i] = rf.getLastLogIdx() + 1
+	}
 }
 
-func (rf *Raft) beFollower(termid int) {
+func (rf *Raft) beFollower(termId int) {
+	rf.state = Follower
+	rf.votedFor = NULL
+	rf.currentTerm = termId
+}
 
+func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply) {
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
+
+	if args.Term > rf.currentTerm {
+		rf.beFollower(args.Term)
+	}
+	send(rf.appendLogCh)
+
+	reply.Term = rf.currentTerm
+	reply.Success = false
+	reply.ConflictTerm = NULL
+	reply.ConflictIndex = 0
+	prevLogIdxTerm := -1
+	logSize := len(rf.log)
+	if args.PrevLogIndex >= 0 && args.PrevLogIndex < len(rf.log) {
+		prevLogIdxTerm = rf.log[args.PrevLogIndex].Term
+	}
+	if prevLogIdxTerm != args.PrevLogTerm {
+		reply.ConflictIndex = logSize
+		if prevLogIdxTerm == -1 {
+
+		} else {
+			reply.ConflictTerm = prevLogIdxTerm
+			i := 0
+			for ; i < logSize; i++ {
+				if rf.log[i].Term == reply.ConflictTerm {
+					reply.ConflictIndex = i
+					break
+				}
+			}
+		}
+		return
+	}
+
+	if args.Term < rf.currentTerm {
+		return
+	}
+
+	index := args.PrevLogIndex
+	for i := 0; i < len(args.Entries); i++ {
+		index++
+		if index < logSize {
+			if rf.log[index].Term == args.Entries[i].Term {
+				continue
+			} else {
+				rf.log = rf.log[:index]
+			}
+		}
+		rf.log = append(rf.log, args.Entries[i:]...)
+		rf.persist()
+		break
+	}
+}
+
+//选举Leader之后的动作
+func (rf *Raft) startAppendLog() {
+	for i := 0; i < len(rf.peers); i++ {
+		if i == rf.me {
+			continue
+		}
+		go func(idx int) {
+			for {
+				rf.mu.Lock()
+				if rf.state != Leader {
+					rf.mu.Unlock()
+					return
+				}
+				args := AppendEntriesArgs{
+					Term:         rf.currentTerm,
+					LeaderId:     rf.me,
+					PrevLogIndex: rf.getPrevLogIdx(idx),
+					PrevLogTerm:  rf.getPrevLogTerm(idx),
+					Entries:      append(make([]Log, 0), rf.log[rf.nextIndex[idx]:]...),
+					LeaderCommit: rf.commitIndex,
+				}
+				rf.mu.Unlock()
+				reply := &AppendEntriesReply{}
+				ret := rf.sendAppendEntries(idx, &args, reply)
+			}
+		}(i)
+	}
+}
+
+func (rf *Raft) getPrevLogIdx(idx int) int {
+	return rf.nextIndex[idx] - 1
+}
+
+func (rf *Raft) getPrevLogTerm(idx int) int {
+	prevLogIdx := rf.getPrevLogIdx(idx)
+	if prevLogIdx < 0 {
+		return -1
+	}
+	return rf.log[prevLogIdx].Term
+}
+
+func (rf *Raft) sendAppendEntries(i int, args *AppendEntriesArgs, reply *AppendEntriesReply) interface{} {
+	ok := rf.peers[i].Call("Raft.AppendEntries", args, reply)
+	return ok
+}
+
+func send(ch chan bool) {
+	select {
+	case <-ch: //do nothing,just for consume element in channel
+	default:
+	}
+	ch <- true
 }
 
 //
