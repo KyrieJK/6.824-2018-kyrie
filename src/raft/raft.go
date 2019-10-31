@@ -361,8 +361,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 
 		} else {
 			reply.ConflictTerm = prevLogIdxTerm
-			i := 0
-			for ; i < logSize; i++ {
+			for i := 0; i < logSize; i++ {
 				if rf.log[i].Term == reply.ConflictTerm {
 					reply.ConflictIndex = i
 					break
@@ -372,6 +371,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 		return
 	}
 
+	//Reply false if args.term < currentTerm
 	if args.Term < rf.currentTerm {
 		return
 	}
@@ -390,6 +390,12 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 		rf.persist()
 		break
 	}
+
+	if args.LeaderCommit > rf.commitIndex {
+		rf.commitIndex = Min(args.LeaderCommit, rf.getLastLogIdx())
+		rf.updateLastApplied()
+	}
+	reply.Success = true
 }
 
 //选举Leader之后的动作
