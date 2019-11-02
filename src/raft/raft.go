@@ -18,6 +18,8 @@ package raft
 //
 
 import (
+	"6.824-2018-kyrie/src/labgob"
+	"bytes"
 	"math/rand"
 	"sync"
 	"sync/atomic"
@@ -120,6 +122,13 @@ func (rf *Raft) persist() {
 	// e.Encode(rf.yyy)
 	// data := w.Bytes()
 	// rf.persister.SaveRaftState(data)
+	w := new(bytes.Buffer)
+	e := labgob.NewEncoder(w)
+	e.Encode(rf.currentTerm)
+	e.Encode(rf.votedFor)
+	e.Encode(rf.log)
+	data := w.Bytes()
+	rf.persister.SaveRaftState(data)
 }
 
 //
@@ -142,6 +151,18 @@ func (rf *Raft) readPersist(data []byte) {
 	//   rf.xxx = xxx
 	//   rf.yyy = yyy
 	// }
+	r := bytes.NewBuffer(data)
+	d := labgob.NewDecoder(r)
+	var currentTerm int
+	var votedFor int
+	var log []Log
+	if d.Decode(&currentTerm) != nil || d.Decode(&votedFor) != nil || d.Decode(&log) != nil {
+		DPrintf("readPersist ERROR for server %v", rf.me)
+	} else {
+		rf.currentTerm = currentTerm
+		rf.votedFor = votedFor
+		rf.log = log
+	}
 }
 
 //
@@ -171,6 +192,26 @@ type RequestVoteReply struct {
 //
 func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	// Your code here (2A, 2B).
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
+	if args.Term > rf.currentTerm {
+		rf.beFollower(args.Term)
+	}
+
+	reply.Term = rf.currentTerm
+	reply.VoteGranted = false
+
+	if (args.Term < rf.currentTerm) || (rf.votedFor != NULL && rf.votedFor != args.CandidateId) {
+
+	} else if args.LastLogTerm < rf.getLastLogTerm() || (args.LastLogTerm == rf.getLastLogTerm() && args.LastLogIndex < rf.getLastLogIdx()) {
+
+	} else {
+		rf.votedFor = args.CandidateId
+		reply.VoteGranted = true
+		rf.state = Follower
+		rf.persist()
+		send(rf.voteCh)
+	}
 }
 
 //
@@ -238,12 +279,22 @@ type AppendEntriesReply struct {
 // the leader.
 //
 func (rf *Raft) Start(command interface{}) (int, int, bool) {
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
 	index := -1
-	term := -1
-	isLeader := true
+	term := rf.currentTerm
+	isLeader := rf.state == Leader
 
 	// Your code here (2B).
-
+	if isLeader {
+		index = rf.getLastLogIdx() + 1
+		newLog := Log{
+			Term:    rf.currentTerm,
+			Command: command,
+		}
+		rf.log = append(rf.log, newLog)
+		rf.persist()
+	}
 	return index, term, isLeader
 }
 
@@ -335,6 +386,7 @@ func (rf *Raft) beFollower(termId int) {
 	rf.state = Follower
 	rf.votedFor = NULL
 	rf.currentTerm = termId
+	rf.persist()
 }
 
 func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply) {
@@ -422,6 +474,19 @@ func (rf *Raft) startAppendLog() {
 				rf.mu.Unlock()
 				reply := &AppendEntriesReply{}
 				ret := rf.sendAppendEntries(idx, &args, reply)
+				rf.mu.Lock()
+				if !ret || rf.state != Leader || rf.currentTerm != args.Term {
+					rf.mu.Unlock()
+					return
+				}
+				if reply.Term > rf.currentTerm {
+					rf.beFollower(reply.Term)
+					rf.mu.Unlock()
+					return
+				}
+				if reply.Success {
+
+				}
 			}
 		}(i)
 	}
@@ -439,9 +504,22 @@ func (rf *Raft) getPrevLogTerm(idx int) int {
 	return rf.log[prevLogIdx].Term
 }
 
-func (rf *Raft) sendAppendEntries(i int, args *AppendEntriesArgs, reply *AppendEntriesReply) interface{} {
+func (rf *Raft) sendAppendEntries(i int, args *AppendEntriesArgs, reply *AppendEntriesReply) bool {
 	ok := rf.peers[i].Call("Raft.AppendEntries", args, reply)
 	return ok
+}
+
+func (rf *Raft) updateLastApplied() {
+	for rf.lastApplied < rf.commitIndex {
+		rf.lastApplied++
+		curLog := rf.log[rf.lastApplied]
+		applyMsg := ApplyMsg{
+			CommandValid: true,
+			Command:      curLog.Command,
+			CommandIndex: rf.lastApplied,
+		}
+		rf.applyCh <- applyMsg
+	}
 }
 
 func send(ch chan bool) {
