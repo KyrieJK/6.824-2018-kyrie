@@ -21,6 +21,7 @@ import (
 	"6.824-2018-kyrie/src/labgob"
 	"bytes"
 	"math/rand"
+	"sort"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -188,7 +189,7 @@ type RequestVoteReply struct {
 }
 
 //
-// example RequestVote RPC handler.
+// RequestVote RPC handler.
 //
 func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	// Your code here (2A, 2B).
@@ -389,6 +390,7 @@ func (rf *Raft) beFollower(termId int) {
 	rf.persist()
 }
 
+//AppendEntries RPC Handler
 func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply) {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
@@ -450,7 +452,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	reply.Success = true
 }
 
-//选举Leader之后的动作
+//Leader发出AppendLog动作
 func (rf *Raft) startAppendLog() {
 	for i := 0; i < len(rf.peers); i++ {
 		if i == rf.me {
@@ -484,8 +486,26 @@ func (rf *Raft) startAppendLog() {
 					rf.mu.Unlock()
 					return
 				}
-				if reply.Success {
-
+				if reply.Success { //If AppendEntries success,update nextIndex and matchIndex for each follower
+					rf.updateNextMatchIdx(idx, args.PrevLogIndex+len(args.Entries))
+					rf.mu.Unlock()
+					return
+				} else { // If AppendEntries RPC fails because of log entry's inconsistency,retry after decrement nextIndex
+					targetIndex := reply.ConflictIndex
+					if reply.ConflictTerm != NULL {
+						logSize := len(rf.log)
+						for i := 0; i < logSize; i++ {
+							if rf.log[i].Term != reply.ConflictTerm {
+								continue
+							}
+							for i < logSize && rf.log[i].Term == reply.ConflictTerm {
+								i++
+							}
+							targetIndex = i
+						}
+					}
+					rf.nextIndex[idx] = Min(len(rf.log), targetIndex)
+					rf.mu.Unlock()
 				}
 			}
 		}(i)
@@ -519,6 +539,24 @@ func (rf *Raft) updateLastApplied() {
 			CommandIndex: rf.lastApplied,
 		}
 		rf.applyCh <- applyMsg
+	}
+}
+
+func (rf *Raft) updateNextMatchIdx(server int, matchIdx int) {
+	rf.matchIndex[server] = matchIdx
+	rf.nextIndex[server] = matchIdx + 1
+	rf.updateCommitIndex()
+}
+
+func (rf *Raft) updateCommitIndex() {
+	rf.matchIndex[rf.me] = len(rf.log) - 1
+	copyMatchIndex := make([]int, len(rf.matchIndex))
+	copy(copyMatchIndex, rf.matchIndex)
+	sort.Sort(sort.Reverse(sort.IntSlice(copyMatchIndex))) //copyMatchIndex中元素降序排序
+	N := copyMatchIndex[len(copyMatchIndex)/2]
+	if N > rf.commitIndex && rf.log[N].Term == rf.currentTerm {
+		rf.commitIndex = N
+		rf.updateLastApplied()
 	}
 }
 
