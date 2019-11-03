@@ -552,11 +552,11 @@ func (rf *Raft) updateCommitIndex() {
 	rf.matchIndex[rf.me] = len(rf.log) - 1
 	copyMatchIndex := make([]int, len(rf.matchIndex))
 	copy(copyMatchIndex, rf.matchIndex)
-	sort.Sort(sort.Reverse(sort.IntSlice(copyMatchIndex))) //copyMatchIndex中元素降序排序
-	N := copyMatchIndex[len(copyMatchIndex)/2]
-	if N > rf.commitIndex && rf.log[N].Term == rf.currentTerm {
+	sort.Sort(sort.Reverse(sort.IntSlice(copyMatchIndex)))      //copyMatchIndex中元素降序排序,按照Raft协议中每个节点中的matchIndex进行降序排序
+	N := copyMatchIndex[len(copyMatchIndex)/2]                  //取copyMatchIndex数组中中间节点元素，也就是matchIndex数组中的元素：对于每一个服务器节点，记录已经复制到该服务器的log entry的最高索引值
+	if N > rf.commitIndex && rf.log[N].Term == rf.currentTerm { //updateCommitIndex的关键就是N>commitIndex，a majority of matchIndex[i]≥N。如果超过一半的服务器节点已经
 		rf.commitIndex = N
-		rf.updateLastApplied()
+		rf.updateLastApplied() //commited后需要apply到上层状态机，需要更新lastApplied
 	}
 }
 
