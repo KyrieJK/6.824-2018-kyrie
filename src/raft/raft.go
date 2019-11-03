@@ -93,6 +93,8 @@ type Raft struct {
 	applyCh     chan ApplyMsg
 	voteCh      chan bool
 	appendLogCh chan bool
+
+	killCh chan bool
 }
 
 // return currentTerm and whether this server
@@ -307,6 +309,7 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 //
 func (rf *Raft) Kill() {
 	// Your code here, if desired.
+	send(rf.killCh)
 }
 
 func (rf *Raft) beCandidate() {
@@ -600,6 +603,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.applyCh = applyCh
 	rf.voteCh = make(chan bool, 1)
 	rf.appendLogCh = make(chan bool, 1)
+	rf.killCh = make(chan bool, 1)
 
 	// initialize from state persisted before a crash
 	rf.readPersist(persister.ReadRaftState())
@@ -608,6 +612,12 @@ func Make(peers []*labrpc.ClientEnd, me int,
 
 	go func() {
 		for {
+			select {
+			case <-rf.killCh:
+				return
+			default:
+
+			}
 			electionTime := time.Duration(rand.Intn(100)+300) * time.Millisecond
 			switch rf.state {
 			case Follower, Candidate:
